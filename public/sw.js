@@ -1,4 +1,4 @@
-const CACHE_NAME = "splittrip-offline-v5";
+const CACHE_NAME = "splittrip-offline-v6";
 
 const CORE_URLS = ["/", "/manifest.webmanifest"];
 
@@ -76,40 +76,36 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Navigation requests: Cache-first / Stale-while-revalidate with / fallback
+  // Navigation requests: Network-first when online, instant cache fallback in Airplane Mode
   if (request.mode === "navigate" || request.destination === "document") {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
+        try {
+          const networkResponse = await fetch(request);
+          if (networkResponse && networkResponse.ok) {
+            cache.put(request, networkResponse.clone());
+            if (url.pathname === "/") {
+              cache.put("/index.html", networkResponse.clone());
+            }
+            return networkResponse;
+          }
+        } catch {
+          // Offline — fall through to cache
+        }
+
         const cached =
           (await cache.match(request)) ||
           (await cache.match("/")) ||
           (await cache.match("/index.html"));
 
-        const networkPromise = fetch(request)
-          .then((response) => {
-            if (response && response.ok) {
-              cache.put(request, response.clone());
-              if (url.pathname === "/") {
-                cache.put("/index.html", response.clone());
-              }
-            }
-            return response;
+        return (
+          cached ||
+          new Response("Offline", {
+            status: 503,
+            statusText: "Service Unavailable",
+            headers: { "Content-Type": "text/plain" },
           })
-          .catch(() => null);
-
-        if (cached) {
-          event.waitUntil(networkPromise);
-          return cached;
-        }
-
-        const networkResponse = await networkPromise;
-        if (networkResponse) return networkResponse;
-
-        return new Response("Offline", {
-          status: 503,
-          statusText: "Service Unavailable",
-          headers: { "Content-Type": "text/plain" },
-        });
+        );
       })
     );
     return;
